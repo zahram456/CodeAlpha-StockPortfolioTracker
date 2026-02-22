@@ -1,70 +1,97 @@
 # CodeAlpha Stock Portfolio Tracker
 
-A Python stock portfolio tracker with both CLI and desktop GUI modes.
+A Python-based stock portfolio tracker with two interfaces:
+- `CLI` for quick terminal workflows
+- `GUI` for a richer desktop experience with portfolio analytics
 
-## Features
-- Accepts multiple stock entries from user input
-- Validates numeric input to prevent crashes
-- Aggregates duplicate symbols into one portfolio position
-- Calculates per-stock investment value (`quantity x price`)
-- Computes total portfolio investment value
-- Prints a formatted portfolio summary in the terminal
-- Saves summary to `portfolio_summary.txt`
-- Includes a styled GUI built with `tkinter`
-- Saves portfolio state automatically in `portfolio_data.json`
-- Supports both text and CSV export (`portfolio_summary.txt`, `portfolio_summary.csv`)
-- Provides Add mode and Set mode in GUI for faster quantity updates
-- Adds a professional menu bar (File/Edit/Help)
-- Includes portfolio KPI cards (total value, position count, top holding)
-- Supports live symbol filtering and sortable table columns
-- Includes unit tests for core behavior
+The project is structured to keep portfolio logic reusable across both interfaces.
+
+## Key Features
+
+### Core Portfolio Logic
+- Tracks holdings by symbol and quantity
+- Aggregates duplicate symbols into a single position
+- Calculates per-position and total portfolio value
+- Formats values as currency for reports and UI
+
+### Desktop GUI (`tkinter`)
+- Professional dashboard layout with KPI cards:
+  - Total portfolio value
+  - Number of positions
+  - Top holding by value
+- Add mode and Set mode for flexible quantity updates
+- Sortable portfolio table columns
+- Live symbol filtering
+- Menu bar with export and portfolio management actions
+- Auto-save and auto-load of local portfolio state
+
+### Reporting
+- Text summary export to `portfolio_summary.txt`
+- CSV export to `portfolio_summary.csv`
+
+### Engineering Quality
+- Unit tests covering portfolio calculations, validation, persistence, and export
+- Shared business logic used by both CLI and GUI
 
 ## Tech Stack
 - Python 3
-- Tkinter (Python standard library)
+- Tkinter (standard library)
+- `unittest` for test automation
 
-## Project Files
-- `stock_tracker.py` - CLI script and shared portfolio logic
-- `stock_tracker_gui.py` - desktop GUI app
-- `portfolio_summary.txt` - generated output file with portfolio summary
-- `portfolio_summary.csv` - generated CSV report
-- `portfolio_data.json` - auto-saved GUI portfolio state
+## Project Structure
+- `stock_tracker.py` - core domain logic and CLI entrypoint
+- `stock_tracker_gui.py` - desktop GUI entrypoint
+- `test_stock_tracker.py` - unit test suite
+- `.gitignore` - excludes generated/cache files
 
-## Predefined Stock Prices
-The script currently uses hardcoded prices for:
+Generated runtime files:
+- `portfolio_data.json` (GUI auto-save)
+- `portfolio_summary.txt` (text report)
+- `portfolio_summary.csv` (CSV report)
+
+## Supported Symbols and Prices
+Current implementation uses predefined prices:
 - `AAPL`: 180
 - `TSLA`: 250
 - `GOOGL`: 2800
 - `MSFT`: 320
 - `AMZN`: 3500
 
-## How to Run
-1. Open terminal in this project folder.
-2. Run CLI:
+## Getting Started
 
+### 1. Clone and enter the project
+```bash
+git clone https://github.com/zahram456/CodeAlpha-StockPortfolioTracker.git
+cd CodeAlpha-StockPortfolioTracker
+```
+
+### 2. Run CLI
 ```bash
 python stock_tracker.py
 ```
 
-3. Run GUI:
-
+### 3. Run GUI
 ```bash
 python stock_tracker_gui.py
 ```
 
-## Run Tests
+## Testing
+Run the full test suite:
 ```bash
 python -m unittest -v
 ```
-## Example Flow
-- Enter number of stocks to add
-- For each stock, enter symbol and quantity
-- View portfolio summary and total investment
-- Find saved report in `portfolio_summary.txt`
 
-## Notes
-- Stock symbols are case-insensitive in input (converted to uppercase).
-- If a symbol is not in the predefined list, it is skipped with a warning.
+## Design Notes
+- Input is normalized to uppercase symbols.
+- Invalid symbols are rejected safely.
+- Portfolio state persists locally for GUI sessions.
+- Export artifacts are intentionally local and excluded from source control.
+
+## Roadmap
+- Live market price integration (API with fallback)
+- Historical performance tracking
+- Portfolio allocation charts
+- Packaging as a standalone desktop executable
 
 ## License
-This project is for learning and practice.
+This project is intended for learning and practice.
