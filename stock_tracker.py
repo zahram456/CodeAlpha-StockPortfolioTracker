@@ -237,6 +237,12 @@ class PortfolioDB:
         conn.execute("PRAGMA foreign_keys = ON")
         return conn
 
+    def _validate_stock_name(self, symbol: str) -> str:
+        normalized = symbol.title()
+        if normalized not in STOCK_PRICES:
+            raise ValueError(f"Unsupported stock name: {symbol}")
+        return normalized
+
     @contextmanager
     def _connection(self):
         conn = self._connect()
@@ -303,7 +309,7 @@ class PortfolioDB:
         return {row["symbol"]: int(row["quantity"]) for row in rows}
 
     def add_holding(self, symbol: str, quantity: int, price: float) -> None:
-        symbol = symbol.title()
+        symbol = self._validate_stock_name(symbol)
         if quantity <= 0:
             raise ValueError("Quantity must be positive.")
 
@@ -334,7 +340,7 @@ class PortfolioDB:
             )
 
     def set_holding(self, symbol: str, quantity: int, price: float) -> None:
-        symbol = symbol.title()
+        symbol = self._validate_stock_name(symbol)
         if quantity <= 0:
             raise ValueError("Quantity must be positive.")
         now = utc_timestamp()
@@ -359,7 +365,7 @@ class PortfolioDB:
             )
 
     def remove_holding(self, symbol: str) -> None:
-        symbol = symbol.title()
+        symbol = self._validate_stock_name(symbol)
         now = utc_timestamp()
 
         with self._connection() as conn:
@@ -440,6 +446,11 @@ class PortfolioDB:
                 (previous_snapshot_id,),
             ).fetchall()
         return {row["symbol"]: float(row["value"]) for row in value_rows}
+
+    def get_snapshot_count(self) -> int:
+        with self._connection() as conn:
+            row = conn.execute("SELECT COUNT(*) AS count FROM snapshots").fetchone()
+        return int(row["count"]) if row is not None else 0
 
     def record_export(self, export_format: str, filename: str) -> None:
         with self._connection() as conn:

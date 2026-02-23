@@ -44,10 +44,12 @@ class PortfolioTrackerGUI:
         self.sort_column = "symbol"
         self.sort_reverse = False
         self.mover_labels: list[ttk.Label] = []
+        self.export_labels: list[ttk.Label] = []
 
         self._setup_style()
         self._build_menu()
         self._build_layout()
+        self._bind_shortcuts()
         self._refresh_table()
 
     def _setup_style(self) -> None:
@@ -146,6 +148,11 @@ class PortfolioTrackerGUI:
             text="SQLite-backed portfolio manager with snapshots, exports, and analytics.",
             style="Sub.TLabel",
         ).pack(anchor="w", pady=(4, 0))
+        ttk.Label(
+            header,
+            text="Shortcuts: Enter=Save Holding | Delete=Remove | Ctrl+S=TXT | Ctrl+Shift+S=CSV | Ctrl+P=PDF",
+            style="Sub.TLabel",
+        ).pack(anchor="w", pady=(2, 0))
 
         top_row = ttk.Frame(container, style="App.TFrame")
         top_row.pack(fill="x", pady=(0, 12))
@@ -158,7 +165,7 @@ class PortfolioTrackerGUI:
         ttk.Label(input_card, text="Stock Name").grid(row=1, column=0, sticky="w")
         ttk.Label(input_card, text="Quantity").grid(row=1, column=2, sticky="w", padx=(12, 0))
 
-        self.symbol_var = tk.StringVar(value="AAPL")
+        self.symbol_var = tk.StringVar(value="Apple")
         self.quantity_var = tk.StringVar()
         self.entry_mode_var = tk.StringVar(value="add")
         self.symbol_combo = ttk.Combobox(
@@ -191,6 +198,11 @@ class PortfolioTrackerGUI:
             style="Accent.TButton",
             command=self.add_or_update_holding,
         ).grid(row=2, column=3, sticky="w", padx=(12, 0), pady=(4, 0))
+        ttk.Label(
+            input_card,
+            text="Tip: select a table row to load it in Set mode quickly.",
+            style="Sub.TLabel",
+        ).grid(row=4, column=0, columnspan=4, sticky="w", pady=(8, 0))
 
         summary_card = ttk.Frame(top_row, style="Card.TFrame", padding=14)
         summary_card.pack(side="left", fill="both", padx=(0, 10))
@@ -235,6 +247,15 @@ class PortfolioTrackerGUI:
             label = ttk.Label(movers_frame, text="-", style="Sub.TLabel")
             label.pack(anchor="w", pady=(8, 0))
             self.mover_labels.append(label)
+        ttk.Label(
+            movers_frame,
+            text="Recent Exports",
+            style="KpiLabel.TLabel",
+        ).pack(anchor="w", pady=(16, 0))
+        for _ in range(3):
+            label = ttk.Label(movers_frame, text="-", style="Sub.TLabel")
+            label.pack(anchor="w", pady=(6, 0))
+            self.export_labels.append(label)
 
         table_card = ttk.Frame(container, style="Card.TFrame", padding=12)
         table_card.pack(fill="both", expand=True, pady=(0, 12))
@@ -266,6 +287,8 @@ class PortfolioTrackerGUI:
         self.table.column("weight", anchor="e", width=130)
         scrollbar = ttk.Scrollbar(table_card, orient="vertical", command=self.table.yview)
         self.table.configure(yscrollcommand=scrollbar.set)
+        self.table.tag_configure("odd", background="#ffffff")
+        self.table.tag_configure("even", background="#f7faff")
         self.table.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
 
@@ -303,6 +326,13 @@ class PortfolioTrackerGUI:
         self.filter_entry.bind("<Return>", lambda _event: self._refresh_table())
         self.table.bind("<<TreeviewSelect>>", self._load_selected_into_form)
         self.filter_var.trace_add("write", self._on_filter_change)
+
+    def _bind_shortcuts(self) -> None:
+        self.root.bind("<Delete>", lambda _event: self.remove_selected())
+        self.root.bind("<Control-s>", lambda _event: self.export_summary())
+        self.root.bind("<Control-Shift-s>", lambda _event: self.export_csv())
+        self.root.bind("<Control-Shift-S>", lambda _event: self.export_csv())
+        self.root.bind("<Control-p>", lambda _event: self.export_pdf())
 
     def _validated_inputs(self) -> tuple[str, int] | None:
         symbol = self.symbol_var.get().strip().title()
@@ -381,6 +411,11 @@ class PortfolioTrackerGUI:
             start_angle += extent
 
     def _refresh_top_movers(self, items: list[PortfolioItem]) -> None:
+        if self.db.get_snapshot_count() < 2:
+            for label in self.mover_labels:
+                label.configure(text="No baseline snapshot yet")
+            return
+
         previous_values = self.db.get_previous_snapshot_values()
         movers = calculate_top_movers(items, previous_values, top_n=3)
         for idx, label in enumerate(self.mover_labels):
@@ -391,6 +426,18 @@ class PortfolioTrackerGUI:
             sign = "+" if delta >= 0 else "-"
             label.configure(text=f"{symbol}: {sign}{format_currency(abs(delta))}")
 
+    def _refresh_export_history(self) -> None:
+        history = self.db.get_export_history(limit=3)
+        for idx, label in enumerate(self.export_labels):
+            if idx >= len(history):
+                label.configure(text="-")
+                continue
+            row = history[idx]
+            time_part = row["created_at"].split("T")[-1].replace("Z", "")
+            label.configure(
+                text=f'{row["export_format"].upper()} -> {row["filename"]} ({time_part})'
+            )
+
     def _refresh_table(self) -> None:
         for row in self.table.get_children():
             self.table.delete(row)
@@ -398,7 +445,7 @@ class PortfolioTrackerGUI:
         all_items = self._portfolio_items()
         visible_items = self._visible_items(all_items)
         total = calculate_total_value(all_items)
-        for item in visible_items:
+        for row_idx, item in enumerate(visible_items):
             weight = 0 if total == 0 else (item.value / total) * 100
             self.table.insert(
                 "",
@@ -411,6 +458,7 @@ class PortfolioTrackerGUI:
                     format_currency(item.value),
                     f"{weight:.1f}%",
                 ),
+                tags=("even" if row_idx % 2 == 0 else "odd",),
             )
 
         metrics = calculate_portfolio_metrics(all_items)
@@ -423,6 +471,7 @@ class PortfolioTrackerGUI:
         )
         self._draw_allocation_chart(all_items)
         self._refresh_top_movers(all_items)
+        self._refresh_export_history()
 
         timestamp = datetime.now().strftime("%H:%M:%S")
         self.status_var.set(

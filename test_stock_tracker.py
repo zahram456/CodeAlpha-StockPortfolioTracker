@@ -107,7 +107,7 @@ class TestStockTracker(unittest.TestCase):
     def test_save_summary_pdf(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             filename = os.path.join(temp_dir, "summary.pdf")
-            lines = ["Stock Portfolio Summary", "AAPL - 2 shares - $200.00"]
+            lines = ["Stock Portfolio Summary", "Apple - 2 shares - $200.00"]
             stock_tracker.save_summary_pdf(filename, lines)
             with open(filename, "rb") as file:
                 header = file.read(5)
@@ -134,8 +134,21 @@ class TestStockTracker(unittest.TestCase):
             db.record_snapshot(stock_tracker.STOCK_PRICES)
             db.set_holding("Apple", 3, stock_tracker.STOCK_PRICES["Apple"])
             db.record_snapshot(stock_tracker.STOCK_PRICES)
+            self.assertEqual(db.get_snapshot_count(), 2)
             previous_values = db.get_previous_snapshot_values()
             self.assertEqual(previous_values["Apple"], 180.0)
+
+    def test_portfolio_db_rejects_unknown_stock_name(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = os.path.join(temp_dir, "portfolio.db")
+            db = stock_tracker.PortfolioDB(db_path)
+            db.initialize()
+            with self.assertRaises(ValueError):
+                db.add_holding("Invalid Corp", 2, 100.0)
+            with self.assertRaises(ValueError):
+                db.set_holding("Invalid Corp", 2, 100.0)
+            with self.assertRaises(ValueError):
+                db.remove_holding("Invalid Corp")
 
     def test_portfolio_db_export_history(self):
         with tempfile.TemporaryDirectory() as temp_dir:
