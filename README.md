@@ -26,8 +26,15 @@ The project uses a SQLite-backed persistence layer to track holdings, transactio
 - Sortable portfolio table columns
 - Live stock filtering
 - Menu bar with export and portfolio management actions
+- Keyboard shortcuts:
+  - `Enter` save holding
+  - `Delete` remove selected holding
+  - `Ctrl+S` export TXT
+  - `Ctrl+Shift+S` export CSV
+  - `Ctrl+P` export PDF
 - Allocation pie chart
-- Top movers panel (based on latest snapshot comparison)
+- Top movers panel (enabled after at least two snapshots)
+- Recent exports activity panel
 
 ### Reporting
 - Text summary export to `portfolio_summary.txt`
@@ -36,7 +43,7 @@ The project uses a SQLite-backed persistence layer to track holdings, transactio
 - Export actions recorded in database history
 
 ### Engineering Quality
-- Unit tests covering portfolio calculations, persistence, snapshots, exports, and edge cases
+- Unit tests covering portfolio calculations, persistence, snapshots, exports, validation, and edge cases
 - Shared business logic used by both CLI and GUI
 - GitHub Actions CI for lint + tests on push and pull request
 
@@ -91,10 +98,12 @@ Run the full test suite:
 ```bash
 python -m unittest -v
 ```
+Current suite: `15` passing tests.
 
 ## Design Notes
 - Input is normalized to title case stock names.
 - Invalid stock names are rejected safely.
+- Database writes also validate stock names to prevent unsupported entries.
 - Persistence uses SQLite tables: `holdings`, `transactions`, `snapshots`, `snapshot_items`, `export_history`.
 - Export artifacts are intentionally local and excluded from source control.
 
