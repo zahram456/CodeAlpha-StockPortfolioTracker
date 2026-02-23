@@ -1,5 +1,6 @@
 __pycache__/
 *.py[cod]
-portfolio_data.json
+portfolio.db
 portfolio_summary.txt
 portfolio_summary.csv
+portfolio_summary.pdf

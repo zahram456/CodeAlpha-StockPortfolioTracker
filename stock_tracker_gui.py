@@ -4,31 +4,46 @@ from datetime import datetime
 
 from stock_tracker import (
     STOCK_PRICES,
+    PortfolioDB,
     PortfolioItem,
+    calculate_allocation_percentages,
     calculate_portfolio_metrics,
+    calculate_top_movers,
     calculate_total_value,
     format_currency,
     generate_summary_lines,
-    load_portfolio_json,
-    save_portfolio_json,
     save_summary,
     save_summary_csv,
+    save_summary_pdf,
 )
 
-DATA_FILE = "portfolio_data.json"
+DB_FILE = "portfolio.db"
+PIE_COLORS = [
+    "#2E86DE",
+    "#E67E22",
+    "#16A085",
+    "#8E44AD",
+    "#E74C3C",
+    "#34495E",
+]
 
 
 class PortfolioTrackerGUI:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
         self.root.title("Stock Portfolio Tracker")
-        self.root.geometry("940x620")
-        self.root.minsize(860, 560)
+        self.root.geometry("1120x700")
+        self.root.minsize(980, 620)
         self.root.configure(bg="#f4f8ff")
 
-        self.quantities = load_portfolio_json(DATA_FILE)
+        self.db = PortfolioDB(DB_FILE)
+        self.db.initialize()
+        self.quantities = self.db.load_holdings()
+        self.db.record_snapshot(STOCK_PRICES)
+
         self.sort_column = "symbol"
         self.sort_reverse = False
+        self.mover_labels: list[ttk.Label] = []
 
         self._setup_style()
         self._build_menu()
@@ -38,13 +53,8 @@ class PortfolioTrackerGUI:
     def _setup_style(self) -> None:
         style = ttk.Style()
         style.theme_use("clam")
-
         style.configure("App.TFrame", background="#f4f8ff")
-        style.configure(
-            "Card.TFrame",
-            background="#ffffff",
-            relief="flat",
-        )
+        style.configure("Card.TFrame", background="#ffffff", relief="flat")
         style.configure(
             "Title.TLabel",
             font=("Segoe UI Semibold", 20),
@@ -75,21 +85,13 @@ class PortfolioTrackerGUI:
             background="#ffffff",
             foreground="#0f9d58",
         )
-        style.configure(
-            "Accent.TButton",
-            font=("Segoe UI Semibold", 10),
-            padding=(14, 8),
-        )
+        style.configure("Accent.TButton", font=("Segoe UI Semibold", 10), padding=(14, 8))
         style.map(
             "Accent.TButton",
             background=[("!disabled", "#1f6feb"), ("active", "#1859bb")],
             foreground=[("!disabled", "#ffffff")],
         )
-        style.configure(
-            "Danger.TButton",
-            font=("Segoe UI Semibold", 10),
-            padding=(12, 8),
-        )
+        style.configure("Danger.TButton", font=("Segoe UI Semibold", 10), padding=(12, 8))
         style.map(
             "Danger.TButton",
             background=[("!disabled", "#cc3a3a"), ("active", "#a82f2f")],
@@ -116,6 +118,7 @@ class PortfolioTrackerGUI:
         file_menu = tk.Menu(menu_bar, tearoff=0)
         file_menu.add_command(label="Export Summary (.txt)", command=self.export_summary)
         file_menu.add_command(label="Export CSV (.csv)", command=self.export_csv)
+        file_menu.add_command(label="Export PDF (.pdf)", command=self.export_pdf)
         file_menu.add_separator()
         file_menu.add_command(label="Exit", command=self.root.destroy)
         menu_bar.add_cascade(label="File", menu=file_menu)
@@ -137,12 +140,10 @@ class PortfolioTrackerGUI:
 
         header = ttk.Frame(container, style="App.TFrame")
         header.pack(fill="x", pady=(0, 14))
-        ttk.Label(header, text="Stock Portfolio Tracker", style="Title.TLabel").pack(
-            anchor="w"
-        )
+        ttk.Label(header, text="Stock Portfolio Tracker", style="Title.TLabel").pack(anchor="w")
         ttk.Label(
             header,
-            text="Track holdings, update quantities, and export a summary report.",
+            text="SQLite-backed portfolio manager with snapshots, exports, and analytics.",
             style="Sub.TLabel",
         ).pack(anchor="w", pady=(4, 0))
 
@@ -151,18 +152,15 @@ class PortfolioTrackerGUI:
 
         input_card = ttk.Frame(top_row, style="Card.TFrame", padding=14)
         input_card.pack(side="left", fill="x", expand=True, padx=(0, 10))
-
         ttk.Label(input_card, text="Add or Update Holding", style="CardTitle.TLabel").grid(
             row=0, column=0, columnspan=4, sticky="w", pady=(0, 10)
         )
-
-        ttk.Label(input_card, text="Symbol").grid(row=1, column=0, sticky="w")
+        ttk.Label(input_card, text="Stock Name").grid(row=1, column=0, sticky="w")
         ttk.Label(input_card, text="Quantity").grid(row=1, column=2, sticky="w", padx=(12, 0))
 
-        self.symbol_var = tk.StringVar()
+        self.symbol_var = tk.StringVar(value="AAPL")
         self.quantity_var = tk.StringVar()
         self.entry_mode_var = tk.StringVar(value="add")
-
         self.symbol_combo = ttk.Combobox(
             input_card,
             textvariable=self.symbol_var,
@@ -170,13 +168,7 @@ class PortfolioTrackerGUI:
             width=16,
         )
         self.symbol_combo.grid(row=2, column=0, sticky="w", pady=(4, 0))
-        self.symbol_combo.set("AAPL")
-
-        self.quantity_entry = ttk.Entry(
-            input_card,
-            textvariable=self.quantity_var,
-            width=14,
-        )
+        self.quantity_entry = ttk.Entry(input_card, textvariable=self.quantity_var, width=14)
         self.quantity_entry.grid(row=2, column=2, sticky="w", padx=(12, 0), pady=(4, 0))
 
         mode_frame = ttk.Frame(input_card, style="Card.TFrame")
@@ -193,7 +185,6 @@ class PortfolioTrackerGUI:
             variable=self.entry_mode_var,
             value="set",
         ).pack(side="left", padx=(12, 0))
-
         ttk.Button(
             input_card,
             text="Add / Update",
@@ -201,50 +192,55 @@ class PortfolioTrackerGUI:
             command=self.add_or_update_holding,
         ).grid(row=2, column=3, sticky="w", padx=(12, 0), pady=(4, 0))
 
-        for idx in range(4):
-            input_card.grid_columnconfigure(idx, weight=1 if idx in (0, 2) else 0)
-
         summary_card = ttk.Frame(top_row, style="Card.TFrame", padding=14)
-        summary_card.pack(side="right", fill="both")
+        summary_card.pack(side="left", fill="both", padx=(0, 10))
         ttk.Label(summary_card, text="Portfolio Snapshot", style="CardTitle.TLabel").pack(
             anchor="w"
         )
         ttk.Label(summary_card, text="Total Value", style="KpiLabel.TLabel").pack(
             anchor="w", pady=(8, 0)
         )
-        self.total_value_label = ttk.Label(
-            summary_card,
-            text=format_currency(0),
-            style="Value.TLabel",
-        )
+        self.total_value_label = ttk.Label(summary_card, text="$0.00", style="Value.TLabel")
         self.total_value_label.pack(anchor="w")
-
         ttk.Label(summary_card, text="Positions", style="KpiLabel.TLabel").pack(
             anchor="w", pady=(8, 0)
         )
-        self.positions_value_label = ttk.Label(
-            summary_card,
-            text="0",
-            style="Value.TLabel",
-        )
+        self.positions_value_label = ttk.Label(summary_card, text="0", style="Value.TLabel")
         self.positions_value_label.pack(anchor="w")
-
         ttk.Label(summary_card, text="Top Holding", style="KpiLabel.TLabel").pack(
             anchor="w", pady=(8, 0)
         )
-        self.top_holding_label = ttk.Label(
-            summary_card,
-            text="-",
-            style="Value.TLabel",
-        )
+        self.top_holding_label = ttk.Label(summary_card, text="-", style="Value.TLabel")
         self.top_holding_label.pack(anchor="w")
+
+        analytics_card = ttk.Frame(top_row, style="Card.TFrame", padding=14)
+        analytics_card.pack(side="left", fill="both", expand=True)
+        ttk.Label(analytics_card, text="Allocation & Movers", style="CardTitle.TLabel").pack(
+            anchor="w"
+        )
+        analytics_body = ttk.Frame(analytics_card, style="Card.TFrame")
+        analytics_body.pack(fill="both", expand=True, pady=(8, 0))
+        self.pie_canvas = tk.Canvas(
+            analytics_body,
+            width=220,
+            height=170,
+            bg="#ffffff",
+            highlightthickness=0,
+        )
+        self.pie_canvas.pack(side="left", padx=(0, 18))
+        movers_frame = ttk.Frame(analytics_body, style="Card.TFrame")
+        movers_frame.pack(side="left", fill="both", expand=True)
+        ttk.Label(movers_frame, text="Top Movers", style="KpiLabel.TLabel").pack(anchor="w")
+        for _ in range(3):
+            label = ttk.Label(movers_frame, text="-", style="Sub.TLabel")
+            label.pack(anchor="w", pady=(8, 0))
+            self.mover_labels.append(label)
 
         table_card = ttk.Frame(container, style="Card.TFrame", padding=12)
         table_card.pack(fill="both", expand=True, pady=(0, 12))
-
         filter_row = ttk.Frame(table_card, style="Card.TFrame")
         filter_row.pack(fill="x", pady=(0, 8))
-        ttk.Label(filter_row, text="Filter Symbol").pack(side="left")
+        ttk.Label(filter_row, text="Filter Stock").pack(side="left")
         self.filter_var = tk.StringVar()
         self.filter_entry = ttk.Entry(filter_row, textvariable=self.filter_var, width=20)
         self.filter_entry.pack(side="left", padx=(8, 0))
@@ -254,61 +250,53 @@ class PortfolioTrackerGUI:
 
         columns = ("symbol", "quantity", "price", "value", "weight")
         self.table = ttk.Treeview(table_card, columns=columns, show="headings")
-        self.table.heading("symbol", text="Symbol", command=lambda: self.sort_by("symbol"))
-        self.table.heading(
-            "quantity", text="Quantity", command=lambda: self.sort_by("quantity")
-        )
+        self.table.heading("symbol", text="Stock", command=lambda: self.sort_by("symbol"))
+        self.table.heading("quantity", text="Quantity", command=lambda: self.sort_by("quantity"))
         self.table.heading("price", text="Price", command=lambda: self.sort_by("price"))
+        self.table.heading("value", text="Position Value", command=lambda: self.sort_by("value"))
         self.table.heading(
-            "value", text="Position Value", command=lambda: self.sort_by("value")
+            "weight",
+            text="Portfolio Weight",
+            command=lambda: self.sort_by("weight"),
         )
-        self.table.heading(
-            "weight", text="Portfolio Weight", command=lambda: self.sort_by("weight")
-        )
-
         self.table.column("symbol", anchor="center", width=90)
         self.table.column("quantity", anchor="center", width=90)
         self.table.column("price", anchor="e", width=140)
         self.table.column("value", anchor="e", width=160)
         self.table.column("weight", anchor="e", width=130)
-
         scrollbar = ttk.Scrollbar(table_card, orient="vertical", command=self.table.yview)
         self.table.configure(yscrollcommand=scrollbar.set)
-
         self.table.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
 
         actions = ttk.Frame(container, style="App.TFrame")
         actions.pack(fill="x")
-
         ttk.Button(
             actions,
             text="Remove Selected",
             style="Danger.TButton",
             command=self.remove_selected,
         ).pack(side="left")
-
-        ttk.Button(
-            actions,
-            text="Clear Portfolio",
-            command=self.clear_portfolio,
-        ).pack(side="left", padx=(8, 0))
-
+        ttk.Button(actions, text="Clear Portfolio", command=self.clear_portfolio).pack(
+            side="left", padx=(8, 0)
+        )
+        ttk.Button(actions, text="Export PDF", command=self.export_pdf).pack(
+            side="right", padx=(0, 8)
+        )
+        ttk.Button(actions, text="Export CSV", command=self.export_csv).pack(
+            side="right", padx=(0, 8)
+        )
         ttk.Button(
             actions,
             text="Export Summary",
             style="Accent.TButton",
             command=self.export_summary,
         ).pack(side="right")
-        ttk.Button(
-            actions,
-            text="Export CSV",
-            command=self.export_csv,
-        ).pack(side="right", padx=(0, 8))
 
         self.status_var = tk.StringVar(value="Ready")
-        status_label = ttk.Label(container, textvariable=self.status_var, style="Sub.TLabel")
-        status_label.pack(anchor="w", pady=(8, 0))
+        ttk.Label(container, textvariable=self.status_var, style="Sub.TLabel").pack(
+            anchor="w", pady=(8, 0)
+        )
 
         self.quantity_entry.bind("<Return>", self._on_enter_pressed)
         self.symbol_combo.bind("<Return>", self._on_enter_pressed)
@@ -317,36 +305,29 @@ class PortfolioTrackerGUI:
         self.filter_var.trace_add("write", self._on_filter_change)
 
     def _validated_inputs(self) -> tuple[str, int] | None:
-        symbol = self.symbol_var.get().strip().upper()
+        symbol = self.symbol_var.get().strip().title()
         qty_raw = self.quantity_var.get().strip()
-
         if symbol not in STOCK_PRICES:
             messagebox.showerror(
-                "Invalid Symbol",
-                f"Symbol '{symbol}' is not in the supported list: {', '.join(STOCK_PRICES)}",
+                "Invalid Stock",
+                f"Stock '{symbol}' is not in the supported list: {', '.join(STOCK_PRICES)}",
             )
             return None
-
         if not qty_raw.isdigit() or int(qty_raw) <= 0:
-            messagebox.showerror(
-                "Invalid Quantity",
-                "Quantity must be a positive whole number.",
-            )
+            messagebox.showerror("Invalid Quantity", "Quantity must be a positive integer.")
             return None
-
         return symbol, int(qty_raw)
 
     def _portfolio_items(self) -> list[PortfolioItem]:
         return [
             PortfolioItem(symbol=symbol, quantity=qty, price=STOCK_PRICES[symbol])
             for symbol, qty in sorted(self.quantities.items())
+            if symbol in STOCK_PRICES and qty > 0
         ]
 
     def _visible_items(self, items: list[PortfolioItem]) -> list[PortfolioItem]:
         filter_text = self.filter_var.get().strip().upper()
-        visible = items
-        if filter_text:
-            visible = [item for item in items if filter_text in item.symbol]
+        visible = items if not filter_text else [i for i in items if filter_text in i.symbol]
 
         if self.sort_column == "symbol":
             key_fn = lambda item: item.symbol
@@ -354,12 +335,61 @@ class PortfolioTrackerGUI:
             key_fn = lambda item: item.quantity
         elif self.sort_column == "price":
             key_fn = lambda item: item.price
-        elif self.sort_column == "value":
-            key_fn = lambda item: item.value
         else:
             key_fn = lambda item: item.value
-
         return sorted(visible, key=key_fn, reverse=self.sort_reverse)
+
+    def _draw_allocation_chart(self, items: list[PortfolioItem]) -> None:
+        self.pie_canvas.delete("all")
+        allocations = calculate_allocation_percentages(items)
+        if not allocations:
+            self.pie_canvas.create_text(110, 85, text="No data", fill="#66788a")
+            return
+
+        start_angle = 0.0
+        legend_x = 130
+        legend_y = 10
+        for idx, (symbol, percent) in enumerate(allocations):
+            extent = (percent / 100.0) * 360.0
+            color = PIE_COLORS[idx % len(PIE_COLORS)]
+            self.pie_canvas.create_arc(
+                10,
+                10,
+                110,
+                110,
+                start=start_angle,
+                extent=extent,
+                fill=color,
+                outline="#ffffff",
+            )
+            self.pie_canvas.create_rectangle(
+                legend_x,
+                legend_y + idx * 20,
+                legend_x + 10,
+                legend_y + idx * 20 + 10,
+                fill=color,
+                outline=color,
+            )
+            self.pie_canvas.create_text(
+                legend_x + 14,
+                legend_y + idx * 20 + 5,
+                text=f"{symbol} {percent:.1f}%",
+                anchor="w",
+                fill="#33485c",
+                font=("Segoe UI", 9),
+            )
+            start_angle += extent
+
+    def _refresh_top_movers(self, items: list[PortfolioItem]) -> None:
+        previous_values = self.db.get_previous_snapshot_values()
+        movers = calculate_top_movers(items, previous_values, top_n=3)
+        for idx, label in enumerate(self.mover_labels):
+            if idx >= len(movers):
+                label.configure(text="-")
+                continue
+            symbol, delta = movers[idx]
+            sign = "+" if delta >= 0 else "-"
+            label.configure(text=f"{symbol}: {sign}{format_currency(abs(delta))}")
 
     def _refresh_table(self) -> None:
         for row in self.table.get_children():
@@ -368,7 +398,6 @@ class PortfolioTrackerGUI:
         all_items = self._portfolio_items()
         visible_items = self._visible_items(all_items)
         total = calculate_total_value(all_items)
-
         for item in visible_items:
             weight = 0 if total == 0 else (item.value / total) * 100
             self.table.insert(
@@ -392,13 +421,13 @@ class PortfolioTrackerGUI:
             if metrics["positions"] > 0
             else "-"
         )
-        status_time = datetime.now().strftime("%H:%M:%S")
-        self.status_var.set(
-            f"Showing {len(visible_items)} of {metrics['positions']} holdings | Updated {status_time}"
-        )
+        self._draw_allocation_chart(all_items)
+        self._refresh_top_movers(all_items)
 
-    def _persist_quantities(self) -> None:
-        save_portfolio_json(DATA_FILE, self.quantities)
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        self.status_var.set(
+            f"Showing {len(visible_items)} of {metrics['positions']} holdings | Updated {timestamp}"
+        )
 
     def _on_enter_pressed(self, _event: tk.Event) -> None:
         self.add_or_update_holding()
@@ -420,7 +449,7 @@ class PortfolioTrackerGUI:
     def show_about(self) -> None:
         messagebox.showinfo(
             "About",
-            "Stock Portfolio Tracker\nProfessional GUI Edition\nBuilt with Python + Tkinter",
+            "Stock Portfolio Tracker\nSQLite + Snapshots + Exports\nBuilt with Python + Tkinter",
         )
 
     def _load_selected_into_form(self, _event: tk.Event) -> None:
@@ -435,18 +464,22 @@ class PortfolioTrackerGUI:
         self.quantity_var.set(str(quantity))
         self.entry_mode_var.set("set")
 
+    def _reload_from_db(self) -> None:
+        self.quantities = self.db.load_holdings()
+        self.db.record_snapshot(STOCK_PRICES)
+        self._refresh_table()
+
     def add_or_update_holding(self) -> None:
         parsed = self._validated_inputs()
         if parsed is None:
             return
-
         symbol, quantity = parsed
+        price = STOCK_PRICES[symbol]
         if self.entry_mode_var.get() == "set":
-            self.quantities[symbol] = quantity
+            self.db.set_holding(symbol, quantity, price)
         else:
-            self.quantities[symbol] = self.quantities.get(symbol, 0) + quantity
-        self._persist_quantities()
-        self._refresh_table()
+            self.db.add_holding(symbol, quantity, price)
+        self._reload_from_db()
         self.quantity_var.set("")
         self.status_var.set(f"Updated {symbol}.")
 
@@ -455,40 +488,45 @@ class PortfolioTrackerGUI:
         if not selected:
             messagebox.showinfo("No Selection", "Select a row to remove.")
             return
-
         for row_id in selected:
-            self.quantities.pop(row_id, None)
-        self._persist_quantities()
-        self._refresh_table()
+            self.db.remove_holding(row_id)
+        self._reload_from_db()
         self.status_var.set("Removed selected holding(s).")
 
     def clear_portfolio(self) -> None:
         if not self.quantities:
             return
-        confirmed = messagebox.askyesno(
-            "Clear Portfolio",
-            "Remove all holdings from the portfolio?",
-        )
-        if confirmed:
-            self.quantities.clear()
-            self._persist_quantities()
-            self._refresh_table()
+        if messagebox.askyesno("Clear Portfolio", "Remove all holdings from the portfolio?"):
+            self.db.clear_holdings()
+            self._reload_from_db()
             self.status_var.set("Portfolio cleared.")
 
-    def export_summary(self) -> None:
+    def _export(self, export_format: str, filename: str) -> None:
         items = self._portfolio_items()
         total = calculate_total_value(items)
         lines = generate_summary_lines(items, total)
-        save_summary("portfolio_summary.txt", lines)
+        if export_format == "txt":
+            save_summary(filename, lines)
+        elif export_format == "csv":
+            save_summary_csv(filename, items, total)
+        else:
+            save_summary_pdf(filename, lines)
+        self.db.record_export(export_format, filename)
+
+    def export_summary(self) -> None:
+        self._export("txt", "portfolio_summary.txt")
         messagebox.showinfo("Saved", "Portfolio saved to 'portfolio_summary.txt'.")
         self.status_var.set("Exported summary text file.")
 
     def export_csv(self) -> None:
-        items = self._portfolio_items()
-        total = calculate_total_value(items)
-        save_summary_csv("portfolio_summary.csv", items, total)
+        self._export("csv", "portfolio_summary.csv")
         messagebox.showinfo("Saved", "Portfolio saved to 'portfolio_summary.csv'.")
         self.status_var.set("Exported CSV file.")
+
+    def export_pdf(self) -> None:
+        self._export("pdf", "portfolio_summary.pdf")
+        messagebox.showinfo("Saved", "Portfolio saved to 'portfolio_summary.pdf'.")
+        self.status_var.set("Exported PDF file.")
 
 
 def main() -> None:
